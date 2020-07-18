@@ -1,0 +1,5 @@
+opt:
+feature_set: list [egemaps, vggface,....]
+dataroot: str 
+max_seq_len: int
+# in base opt calc input_dim
