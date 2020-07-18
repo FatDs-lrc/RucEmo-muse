@@ -46,34 +46,19 @@ class BaselineModel(BaseModel):
         self.max_seq_len = opt.max_seq_len
         if self.isTrain:
             self.criterion_reg = torch.nn.MSELoss(reduction='sum')
-            # self.criterion_reg = torch.nn.L1Loss(reduction='sum')
+
             # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
             paremeters = [{'params': getattr(self, 'net'+net).parameters()} for net in self.model_names]
             self.optimizer = torch.optim.Adam(paremeters, lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizers.append(self.optimizer)
         
         self.normalize = opt.normalize
-        # mean_std = np.load('/data7/lrc/MuSe2020/MuSe2020_features/wild/feature/lld_aligned_mean_std.npz')
-        # self.mean = mean_std['mean']
-        # self.std = mean_std['std']
-        # self.std[self.std == 0.0] = 1.0
-        # self.mean = torch.from_numpy(self.mean).to(self.device)
-        # self.std = torch.from_numpy(self.std).to(self.device)
     
     def normalize_feature(self, features, mask):
         mean_f = torch.mean(features, dim=1).unsqueeze(1).float()
         std_f = torch.std(features, dim=1).unsqueeze(1).float()
         std_f[std_f == 0.0] = 1.0
         features = (features - mean_f) / std_f
-
-        # mask = torch.sum(mask, dim=-1)[:, None] # [batch_size, ]
-        # mean_f = (torch.sum(features, dim=1) / mask).unsqueeze(1).float() # [batch_size, 1, dim]
-        # std_f = torch.sqrt(torch.sum((features-mean_f)**2, dim=1) / mask).unsqueeze(1).float()
-        # std_f[std_f == 0.0] = 1.0
-        # features = (features - mean_f) / std_f
-
-        # features = (features - self.mean) / self.std
-
         return features
     
     def set_input(self, input):
@@ -103,9 +88,6 @@ class BaselineModel(BaseModel):
         previous_c = torch.zeros(self.hidden_mul, batch_size, self.hidden_size).float().to(self.device) 
         for step in range(split_seg_num):
             feature_step = self.feature[:, step*self.max_seq_len: (step+1)*self.max_seq_len]
-            # if self.normalize:
-            #     feature_step = self.normalize_feature(feature_step)
-            
             prediction, (previous_h, previous_c) = self.forward_step(feature_step, (previous_h, previous_c))
             previous_h = previous_h.detach()
             previous_c = previous_c.detach()

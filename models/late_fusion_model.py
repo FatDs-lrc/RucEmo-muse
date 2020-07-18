@@ -14,6 +14,7 @@ class LateFusionModel(BaseModel):
         parser.add_argument('--dropout_rate', default=0.3, type=float, help='drop out rate of FC layers')
         parser.add_argument('--target', default='arousal', type=str, help='one of [arousal, valence]')
         parser.add_argument('--bidirection', default=False, action='store_true', help='whether to use bidirectional lstm')
+        parser.add_argument('--normalize', action='store_true', default=False, help='whether to normalize step features')
         
         return parser
 
@@ -58,7 +59,15 @@ class LateFusionModel(BaseModel):
             paremeters = [{'params': getattr(self, 'net'+net).parameters()} for net in self.model_names]
             self.optimizer = torch.optim.Adam(paremeters, lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizers.append(self.optimizer)
+        self.normalize = opt.normalize
     
+    def normalize_feature(self, features, mask):
+        mean_f = torch.mean(features, dim=1).unsqueeze(1).float()
+        std_f = torch.std(features, dim=1).unsqueeze(1).float()
+        std_f[std_f == 0.0] = 1.0
+        features = (features - mean_f) / std_f
+        return features
+
     def set_input(self, input):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
 
@@ -70,10 +79,15 @@ class LateFusionModel(BaseModel):
         self.v_feature = input['v_feature'].to(self.device)
         self.l_feature = input['l_feature'].to(self.device)
         assert self.a_feature.size(1) == self.v_feature.size(1) == self.l_feature.size(1)
-        if self.isTrain:
-            self.target = input[self.target_name].to(self.device)
         self.mask = input['mask'].to(self.device)
         self.length = input['length']
+        if self.normalize:
+            self.a_feature = self.normalize_feature(self.a_feature, self.mask)
+            self.v_feature = self.normalize_feature(self.v_feature, self.mask)
+            self.l_feature = self.normalize_feature(self.l_feature, self.mask)
+
+        if self.isTrain:
+            self.target = input[self.target_name].to(self.device)
 
     def run(self):
         """After feed a batch of samples, Run the model."""

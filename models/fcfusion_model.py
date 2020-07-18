@@ -15,6 +15,7 @@ class FcFusionModel(BaseModel):
         parser.add_argument('--dropout_rate', default=0.3, type=float, help='drop out rate of FC layers')
         parser.add_argument('--target', default='arousal', type=str, help='one of [arousal, valence]')
         parser.add_argument('--bidirection', default=False, action='store_true', help='whether to use bidirectional lstm')
+        parser.add_argument('--normalize', action='store_true', default=False, help='whether to normalize step features')
         return parser
 
     def __init__(self, opt, logger=None):
@@ -48,11 +49,17 @@ class FcFusionModel(BaseModel):
         self.max_seq_len = opt.max_seq_len
         if self.isTrain:
             self.criterion_reg = torch.nn.MSELoss(reduction='sum')
-            # self.criterion_reg = torch.nn.L1Loss(reduction='sum')
-            # initialize optimizers; schedulers will be automatically created by function <BaseModel.setup>.
             paremeters = [{'params': getattr(self, 'net'+net).parameters()} for net in self.model_names]
             self.optimizer = torch.optim.Adam(paremeters, lr=opt.lr, betas=(opt.beta1, 0.999))
             self.optimizers.append(self.optimizer)
+        self.normalize = opt.normalize
+
+    def normalize_feature(self, features, mask):
+        mean_f = torch.mean(features, dim=1).unsqueeze(1).float()
+        std_f = torch.std(features, dim=1).unsqueeze(1).float()
+        std_f[std_f == 0.0] = 1.0
+        features = (features - mean_f) / std_f
+        return features
     
     def set_input(self, input):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
@@ -61,11 +68,13 @@ class FcFusionModel(BaseModel):
             input (dict): include the data itself and its metadata information.
 
         """
-        self.feature = input['feature'].to(self.device)
-        if self.isTrain:
-            self.target = input[self.target_name].to(self.device)
+        self.feature = input['feature']
         self.mask = input['mask'].to(self.device)
         self.length = input['length']
+        if self.normalize:
+            self.feature = self.normalize_feature(self.feature, self.mask)
+        if self.isTrain:
+            self.target = input[self.target_name].to(self.device)
 
     def run(self):
         """After feed a batch of samples, Run the model."""
