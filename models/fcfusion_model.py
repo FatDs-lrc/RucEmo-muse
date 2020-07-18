@@ -38,7 +38,7 @@ class FcFusionModel(BaseModel):
             self.hidden_mul = 2
         else:
             self.net_seq = LSTMEncoder(opt.hidden_size, opt.hidden_size)
-            self.hidden_mul = 1
+            self.hidden_mul = 1 
         
         # net regression
         layers = list(map(lambda x: int(x), opt.regress_layers.split(',')))
