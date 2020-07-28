@@ -1,3 +1,4 @@
+import time
 import numpy as np
 from sklearn.metrics import recall_score, f1_score, accuracy_score, confusion_matrix
 
@@ -11,6 +12,70 @@ def scratch_data(data_lst):
     data = np.concatenate(data_lst)
     return data
 
+def smooth_predictions(preds, window=40, mean_or_binomial=True):
+    """
+    Args:
+      preds: list of (subj_timesteps, dim), len(list)=num_subjs
+      window: int (one side timesteps to average)
+    Return:
+      smoothed_preds: shape=preds
+    """
+    if window == 0:
+        return preds
+    if not mean_or_binomial:
+        from scipy.stats import binom
+        binomial_weights = np.zeros((window * 2 + 1,))
+        for i in range(window + 1):
+            binomial_weights[i] = binomial_weights[-i - 1] = binom.pmf(i, window * 2, 0.5)
+    smoothed_preds = []
+    for pred in preds:
+        smoothed_pred = []
+        for t in range(pred.shape[0]):
+            left = np.max([0, t - window])
+            right = np.min([pred.shape[0], t + window])
+            if mean_or_binomial:
+                smoothed_pred.append(np.mean(pred[left: right + 1]))
+            else:
+                if left <= 0:
+                    weights = binomial_weights[window - t:]
+                elif right >= pred.shape[0]:
+                    weights = binomial_weights[:pred.shape[0] - t - window - 1]
+                else:
+                    weights = binomial_weights
+                smoothed_pred.append(np.sum(pred[left: right + 1] * weights))
+        smoothed_preds.append(np.array(smoothed_pred))
+    smoothed_preds = np.array(smoothed_preds)
+    return smoothed_preds
+
+def smooth_func(pred, label, best_window=None, logger=None):
+    start = time.time()
+    if best_window is None:
+        best_ccc, best_window = 0, 0
+        for window in range(0, 30, 5):
+            smoothed_preds = smooth_predictions(pred, window=window)
+            mse, rmse, pcc, ccc = evaluate_regression(y_true=scratch_data(label),
+                                                      y_pred=scratch_data(smoothed_preds))
+            if logger:
+                logger.info('In smooth Eval \twindow {} \tmse {:.4f}, rmse {:.4f}, pcc {:.4f}, ccc {:.4f}'.format(
+                    window, mse, rmse, pcc, ccc))
+            else:
+                print('In smoothing \twindow {} \tmse {:.4f}, rmse {:.4f}, pcc {:.4f}, ccc {:.4f}'.format(
+                    window, mse, rmse, pcc, ccc))
+            
+            if ccc > best_ccc:
+                best_ccc, best_window = ccc, window
+        end = time.time()
+        time_usage = end - start
+        if logger:
+            logger.info('Smooth: best window %d best_ccc %.2f \t Time Taken %.4f', best_window, best_ccc, time_usage)
+        else:
+            print('Smooth: best window %d best_ccc %.2f \t Time Taken %.4f', best_window, best_ccc, time_usage)
+        smoothed_preds = smooth_predictions(pred, window=best_window)
+    elif best_window is not None:
+        smoothed_preds = smooth_predictions(pred, window=best_window)
+    
+    return smoothed_preds, best_window
+    
 def evaluate_regression(y_true, y_pred):
     """ Evaluate the regression performance
         Params:

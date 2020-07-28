@@ -9,50 +9,62 @@ from models import create_model
 from models.utils.config import OptConfig
 from utils.logger import get_logger
 from utils.path import make_path
-from utils.metrics import evaluate_regression, remove_padding, scratch_data
+from utils.metrics import evaluate_regression, remove_padding, scratch_data, smooth_func
 from utils.tools import calc_total_dim, make_folder
 from sklearn.metrics import accuracy_score, recall_score, f1_score, confusion_matrix
 
-def eval(model, val_iter):
+def eval(model, val_iter, best_window):
     model.eval()
     total_pred = []
     total_label = []
     total_length = []
-    total_vids = []
-    record = None
+    
     for i, data in enumerate(val_iter):  # inner loop within one epoch
         model.set_input(data)         # unpack data from dataset and apply preprocessing
         model.test()
         lengths = data['length'].numpy()
         pred = remove_padding(model.output.detach().cpu().numpy(), lengths)
         label = remove_padding(data[opt.target].numpy(), lengths)
-        vids = data['vid']
         total_pred += pred
         total_label += label
-        total_vids += vids
     
     # calculate metrics
+    if smooth:
+        total_pred, best_window = smooth_func(total_pred, total_label, best_window=best_window, logger=None)
+
     total_pred = scratch_data(total_pred)
     total_label = scratch_data(total_label)
     mse, rmse, pcc, ccc = evaluate_regression(total_label, total_pred)
+    model.train()
+
     return mse, rmse, pcc, ccc, total_pred, total_label
 
-def test(model, val_iter):
+def test(model, val_iter, best_window):
     model.eval()
     total_pred = {}
     total_timestamp = {}
-    for i, data in enumerate(val_iter):  # inner loop within one epoch
-        model.set_input(data)         # unpack data from dataset and apply preprocessing
+    for i, data in enumerate(val_iter):         # inner loop within one epoch
+        model.set_input(data, load_label=False)  # unpack data from dataset and apply preprocessing
         model.test()
         lengths = data['length'].numpy()
         vids = data['vid']
-        pred = remove_padding(model.output.detach().cpu().numpy(), lengths)
+        pred = remove_padding(model.output.detach().cpu().numpy(), lengths)        
         timestamp = remove_padding(data['timestamp'].numpy(), lengths)
         for i, vid in enumerate(vids):
             total_pred[vid] = pred[i]
             total_timestamp[vid] = timestamp[i]
     
+    if smooth:
+        total_pred, best_window = smooth_func(total_pred, total_label, best_window=best_window, logger=logger)
+    
     return total_pred, total_timestamp
+
+def load_window_size(config_path, default_window_size):
+    if os.path.exists(config_path):
+        data = f.open(config_path).read()
+        return int(data)
+    else:
+        return default_window_size
 
 def load_config(config_path):
     trn_opt_data = json.load(open(opt_path))
@@ -62,6 +74,10 @@ def load_config(config_path):
     trn_opt.gpu_ids = opt.gpu_ids
     trn_opt.dataroot = 'dataset/wild'
     trn_opt.serial_batches = True
+    if not hasattr(trn_opt, 'normalize'):       # previous model has no attribute normalize
+        setattr(trn_opt, 'normalize', False)
+    if not hasattr(trn_opt, 'loss_type'):
+        setattr(trn_opt, 'loss_type', 'mse')
     return trn_opt
 
 def load_model_from_checkpoint(opt_config, cpkt_dir):
@@ -121,6 +137,8 @@ def check_timestamp(timestamp1, timestamp2):
         assert (timestamp1[key] == timestamp2[key]).all()
 
 if __name__ == '__main__':
+    smooth = False
+    default_window_size = 10
     opt = TestOptions().parse()                         # get training options
     checkpoints = opt.test_checkpoints.strip().split(';')
     all_preds = []
@@ -134,12 +152,14 @@ if __name__ == '__main__':
         print('In model from {}: '.format(checkpoint))
         opt_path = os.path.join(opt.checkpoints_dir, checkpoint, 'train_opt.conf')
         trn_opt = load_config(opt_path)
+        window_path = os.path.join(opt.checkpoints_dir, checkpoint, 'best_eval_window')
+        best_window = load_window_size(window_path, default_window_size)
         assert trn_opt.target == opt.target             # check target of model and tst target
         val_dataset, tst_dataset = create_dataset_with_args(trn_opt, set_name=['val', 'tst'])  # create a dataset given opt.dataset_mode and other options
         checkpoint_dir = os.path.join(opt.checkpoints_dir, checkpoint)
         model = load_model_from_checkpoint(trn_opt, checkpoint_dir)
         # eval val set
-        mse, rmse, pcc, ccc, preds, labels = eval(model, val_dataset)
+        mse, rmse, pcc, ccc, preds, labels = eval(model, val_dataset, best_window)
         total_preds.append(preds)
         if not isinstance(val_label, np.ndarray):
             val_label = labels
@@ -150,7 +170,7 @@ if __name__ == '__main__':
         
         # generate tst_data
         print('Testing ... \n')
-        prediction, timestamp = test(model, tst_dataset)
+        prediction, timestamp = test(model, tst_dataset, best_window)
         if not tst_timestamps:
             tst_timestamps = timestamp
         else:

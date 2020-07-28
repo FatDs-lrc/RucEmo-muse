@@ -1,0 +1,1 @@
+Best eval epoch 49 found with ccc 0.4514

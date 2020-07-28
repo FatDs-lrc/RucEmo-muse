@@ -1,0 +1,1 @@
+Best eval epoch 38 found with ccc 0.3407

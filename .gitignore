@@ -4,6 +4,5 @@ __pycache__/
 dataset/
 checkpoints/
 logs/
-scripts/
 .vscode/
 submit/

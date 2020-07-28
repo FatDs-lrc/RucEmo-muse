@@ -1,0 +1,1 @@
+Best eval epoch 23 found with ccc 0.2546

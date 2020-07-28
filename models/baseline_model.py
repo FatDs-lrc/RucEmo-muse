@@ -61,7 +61,7 @@ class BaselineModel(BaseModel):
         features = (features - mean_f) / std_f
         return features
     
-    def set_input(self, input):
+    def set_input(self, input, load_label=True):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
 
         Parameters:
@@ -73,7 +73,7 @@ class BaselineModel(BaseModel):
         self.length = input['length']
         if self.normalize:
             self.feature = self.normalize_feature(self.feature, self.mask)
-        if self.isTrain:
+        if load_label:
             self.target = input[self.target_name].to(self.device)
 
     def run(self):

@@ -6,7 +6,7 @@ from data import create_dataset, create_dataset_with_args
 from models import create_model
 from utils.logger import get_logger
 from utils.path import make_path
-from utils.metrics import evaluate_regression, remove_padding, scratch_data
+from utils.metrics import evaluate_regression, remove_padding, scratch_data, smooth_func
 from utils.tools import calc_total_dim
 from sklearn.metrics import accuracy_score, recall_score, f1_score, confusion_matrix
 
@@ -29,12 +29,16 @@ def eval(model, val_iter):
         total_label += label
     
     # calculate metrics
+    best_window = None
+    if smooth:
+        total_pred, best_window = smooth_func(total_pred, total_label, best_window=best_window, logger=logger)
+
     total_pred = scratch_data(total_pred)
     total_label = scratch_data(total_label)
     mse, rmse, pcc, ccc = evaluate_regression(total_label, total_pred)
     model.train()
 
-    return mse, rmse, pcc, ccc
+    return mse, rmse, pcc, ccc, best_window
 
 def clean_chekpoints(expr_name, store_epoch):
     root = os.path.join('checkpoints', expr_name)
@@ -43,6 +47,8 @@ def clean_chekpoints(expr_name, store_epoch):
             os.remove(os.path.join(root, checkpoint))
 
 if __name__ == '__main__':
+    smooth = False
+    best_window = None
     opt = TrainOptions().parse()                        # get training options
     logger_path = os.path.join(opt.log_dir, opt.name)   # get logger path
     suffix = opt.name                                   # get logger suffix
@@ -70,6 +76,7 @@ if __name__ == '__main__':
     total_iters = 0                             # the total number of training iterations
     best_eval_ccc = 0                           # record the best eval UAR
     best_eval_epoch = -1                        # record the best eval epoch
+    best_eval_window = None
 
     for epoch in range(opt.epoch_count, opt.niter + opt.niter_decay + 1):    # outer loop for different epochs; we save the model by <epoch_count>, <epoch_count>+<save_latest_freq>
         epoch_start_time = time.time()  # timer for entire epoch
@@ -105,18 +112,26 @@ if __name__ == '__main__':
         model.update_learning_rate()                      # update learning rates at the end of every epoch.
 
         # eval trn set
-        mse, rmse, pcc, ccc = eval(model, dataset)
+        mse, rmse, pcc, ccc, window = eval(model, dataset)
         logger.info('Trn result of epoch %d / %d mse %.4f rmse %.4f pcc %.4f ccc %.4f' % (epoch, opt.niter + opt.niter_decay, mse, rmse, pcc, ccc))
         
         # eval val set
-        mse, rmse, pcc, ccc = eval(model, val_dataset)
+        mse, rmse, pcc, ccc, window = eval(model, val_dataset)
         logger.info('Val result of epoch %d / %d mse %.4f rmse %.4f pcc %.4f ccc %.4f' % (epoch, opt.niter + opt.niter_decay, mse, rmse, pcc, ccc))
         if ccc > best_eval_ccc:
             best_eval_epoch = epoch
             best_eval_ccc = ccc
+            best_eval_window = window
+    
     # print best eval result
     logger.info('Best eval epoch %d found with ccc %f' % (best_eval_epoch, best_eval_ccc))
     logger.info(opt.name)
+    # record best window
+    if smooth:
+        f = open(os.path.join(opt.checkpoints_dir, opt.name, 'best_eval_window'), 'w')
+        f.write(str(best_eval_window))
+        f.close()
+    
     # write to result dir
     clean_chekpoints(opt.name, best_eval_epoch)
     autorun_result_dir = 'autorun/results'
