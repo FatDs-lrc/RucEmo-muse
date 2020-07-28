@@ -1,8 +1,10 @@
 import torch
+import math
 from torch import nn
 import torch.nn.functional as F
 
 from .mmt_modules.transformer import TransformerEncoder
+from .lstm_encoder import FcLstmEncoder
 
 
 class LstmMULTModel(nn.Module):
@@ -155,14 +157,77 @@ class LstmMULTModel(nn.Module):
         output = self.out_layer(hs_proj)
         return output, hs, (h_l, c_l, h_a, c_a, h_v, c_v)
 
+class MMTLstm(nn.Module):
+    def __init__(self, a_dim, v_dim, l_dim, hidden_size, bidirectional=False):
+        """
+        Construct a MulT model.
+        """
+        super(MMTLstm, self).__init__()
+        self.a_proj = nn.LSTM(a_dim, hidden_size, batch_first=True, bidirectional=bidirectional)
+        self.v_proj = nn.LSTM(v_dim, hidden_size, batch_first=True, bidirectional=bidirectional)
+        self.l_proj = nn.LSTM(l_dim, hidden_size, batch_first=True, bidirectional=bidirectional)
+        self.c_proj = FcLstmEncoder(a_dim+v_dim+l_dim, hidden_size * 3, bidirectional=bidirectional)
+        hidden_mul = 1 if not bidirectional else 2
+        self.fc1_a = nn.Sequential(
+            nn.Dropout(0.15),
+            nn.Linear(hidden_size*3*hidden_mul, hidden_size),
+            nn.ReLU()
+        )
+        self.fc1_v = nn.Sequential(
+            nn.Dropout(0.15),
+            nn.Linear(hidden_size*3*hidden_mul, hidden_size),
+            nn.ReLU()
+        )
+        self.fc1_l = nn.Sequential(
+            nn.Dropout(0.15),
+            nn.Linear(hidden_size*3*hidden_mul, hidden_size),
+            nn.ReLU()
+        )
+        self.dropout = nn.Dropout(0.15)
+        self.fc2 = nn.Sequential(
+            nn.Dropout(0.25),
+            nn.Linear(hidden_size*3, hidden_size*2),
+            nn.ReLU()
+        )
+        self.fusion_rnn = nn.LSTM(2*hidden_size, hidden_size, batch_first=True, bidirectional=bidirectional)
+        self.scale = math.sqrt(hidden_size * hidden_mul)
+
+    def forward(self, a_feat, v_feat, l_feat, a_states, v_states, l_states, f_states):
+        ''' Input shape [batch_size, seq_len, dim]
+        '''
+        _a_feat, a_states = self.a_proj(a_feat, a_states)
+        _v_feat, v_states = self.v_proj(v_feat, l_states)
+        _l_feat, l_states = self.l_proj(l_feat, v_states)
+        _c_feat, c_states = self.c_proj(torch.cat([a_feat, v_feat, l_feat], dim=-1))
+        attn_a = self.fc1_a(self.get_attn(_a_feat, _v_feat, _l_feat)) + _a_feat
+        attn_v = self.fc1_v(self.get_attn(_v_feat, _a_feat, _l_feat)) + _v_feat
+        attn_l = self.fc1_l(self.get_attn(_l_feat, _a_feat, _v_feat)) + _l_feat
+        fusion = torch.cat([attn_a, attn_v, attn_l])
+        fusion = self.dropout(self.fc2(fusion), dim=-1)))
+        fusion, f_states = self.fusion_rnn(fusion, f_states)
+        return fusion, (*a_states, *v_states, *l_states, *f_states)
+    
+    def get_attn(self, target_feat, aux_feat1, aux_feat2):
+        t_from_t = self.attn(target_feat, target_feat, target_feat)
+        t_from_1 = self.attn(aux_feat1, target_feat, target_feat)
+        t_from_2 = self.attn(aux_feat2, target_feat, target_feat)
+        attn_feat = torch.cat([t_from_t, t_from_1, t_from_2], dim=-1)
+        return attn_feat
+
+    def attn(self, query, key, value):
+        attn_weight = torch.bmm(query, key.transpose(2, 1))
+        attn_weight = F.softmax(attn_weight / self.scale, dim=-1)
+        ret = torch.bmm(attn_weight, value)
+        return ret
+
 if __name__ == '__main__':
     a = torch.rand(2, 10, 100)
     v = torch.rand(2, 10, 110)
     l = torch.rand(2, 10, 120)
-    state_a = (torch.zeros(2, 2, 30), torch.zeros(2, 2, 30))
-    state_v = (torch.zeros(2, 2, 30), torch.zeros(2, 2, 30))
-    state_l = (torch.zeros(2, 2, 30), torch.zeros(2, 2, 30))
-    model = SeqMULTModel(100, 110, 120, 30, 5, 3, bidirectional=True)
-    pred, hidden, states = model(l, a, v, state_l, state_a, state_l)
-    print(pred.size())
+    state_a = (torch.zeros(2, 2, 128), torch.zeros(2, 2, 128))
+    state_v = (torch.zeros(2, 2, 128), torch.zeros(2, 2, 128))
+    state_l = (torch.zeros(2, 2, 128), torch.zeros(2, 2, 128))
+    model = MMTLstm(100, 110, 120, 128, bidirectional=True)
+    print(model)
+    hidden, states = model(a, v, l, state_l, state_a, state_l)
     print(hidden.size())

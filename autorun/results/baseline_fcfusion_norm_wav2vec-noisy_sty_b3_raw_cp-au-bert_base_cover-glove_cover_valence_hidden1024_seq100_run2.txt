@@ -1,0 +1,1 @@
+Best eval epoch 20 found with ccc 0.2958

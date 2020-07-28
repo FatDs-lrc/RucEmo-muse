@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence, pack_padded_sequence, pad_packed_sequence
+from .fc_encoder import FcEncoder
 
 class BiLSTMEncoder(nn.Module):
     def __init__(self, input_size, hidden_size):
@@ -36,6 +37,20 @@ class LSTMEncoder(nn.Module):
         x: input feature seqences
         states: (h_0, c_0)
         '''
+        r_out, (h_n, h_c) = self.rnn(x, states)
+        return r_out, (h_n, h_c)
+
+class FcLstmEncoder(nn.Module):
+    def __init__(self, input_size, hidden_size, bidirectional=False):
+        super(FcLstmEncoder, self).__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.fc = FcEncoder(input_size, [hidden_size, hidden_size], dropout=0.1, dropout_input=False)
+        self.rnn = nn.LSTM(self.hidden_size, self.hidden_size, batch_first=True,
+                       num_layers=1, bidirectional=bidirectional)
+    
+    def forward(self, x, states):
+        x = self.fc(x)
         r_out, (h_n, h_c) = self.rnn(x, states)
         return r_out, (h_n, h_c)
 

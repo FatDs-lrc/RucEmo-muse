@@ -3,14 +3,15 @@ import os
 import torch.nn.functional as F
 from .base_model import BaseModel
 from .networks.classifier import FcClassifier
-from .networks.mmt_lstm import MMTLstm
+from .networks.mmt_lstm import LstmMULTModel
 
 class MMTLstmModel(BaseModel):
     @staticmethod
     def modify_commandline_options(parser, is_train=True):
         parser.add_argument('--max_seq_len', type=int, default=100, help='max sequence length of lstm')
         parser.add_argument('--hidden_size', default=60, type=int, help='lstm hidden layer')
-        parser.add_argument('--regress_layers', type=str, default='256,128', help='256,128 for 2 layers with 256, 128 nodes respectively')
+        parser.add_argument('--num_heads', default=4, type=int, help='num multi_head')
+        parser.add_argument('--num_layers', default=3, type=int, help='num layers of transformer encoder')
         parser.add_argument('--dropout_rate', default=0.3, type=float, help='drop out rate of FC layers')
         parser.add_argument('--target', default='arousal', type=str, help='one of [arousal, valence]')
         parser.add_argument('--bidirectional', default=False, action='store_true', help='whether to use bidirectional lstm')
@@ -28,23 +29,19 @@ class MMTLstmModel(BaseModel):
         """
         super().__init__(opt, logger)
         self.loss_names = ['MSE']
-        self.model_names = ['_seq', '_reg']
+        self.model_names = ['_seq']
         # net seq
         if opt.hidden_size == -1:
             opt.hidden_size = min(opt.input_dim // 2, 512)
             opt.hidden_size += opt.hidden_size % opt.num_heads
         
-        self.net_seq = MMTLstm(opt.a_dim, opt.v_dim, opt.l_dim, 
-                            opt.hidden_size, bidirectional=opt.bidirectional)
+        self.net_seq = LstmMULTModel(opt.a_dim, opt.v_dim, opt.l_dim, 
+                            opt.hidden_size, opt.num_heads, opt.num_layers, 
+                            bidirectional=opt.bidirectional)
 
         self.hidden_mul = 2 if opt.bidirectional else 1
         self.hidden_size = opt.hidden_size
 
-        # net regression
-        layers = list(map(lambda x: int(x), opt.regress_layers.split(',')))
-        self.hidden_size = opt.hidden_size
-        self.net_reg = FcClassifier(opt.hidden_size * self.hidden_mul, layers, 1, dropout=opt.dropout_rate)
-        
         # settings 
         self.target_name = opt.target
         self.max_seq_len = opt.max_seq_len
@@ -57,13 +54,6 @@ class MMTLstmModel(BaseModel):
         self.normalize_a = opt.normalize_a
         self.normalize_v = opt.normalize_v
         self.normalize_l = opt.normalize_l
-    
-    def normalize_feature(self, features):
-        mean_f = torch.mean(features, dim=1).unsqueeze(1).float()
-        std_f = torch.std(features, dim=1).unsqueeze(1).float()
-        std_f[std_f == 0.0] = 1.0
-        features = (features - mean_f) / std_f
-        return features
     
     def set_input(self, input, load_label=True):
         """Unpack input data from the dataloader and perform necessary pre-processing steps.
@@ -78,18 +68,18 @@ class MMTLstmModel(BaseModel):
         self.mask = input['mask'].to(self.device)
         self.length = input['length']
         if self.normalize_a:
-            self.a_feature = self.normalize_feature(self.a_feature)
+            self.a_feature = self.normalize_feature(self.a_feature, self.mask)
         if self.normalize_v:
-            self.v_feature = self.normalize_feature(self.v_feature)
+            self.v_feature = self.normalize_feature(self.v_feature, self.mask)
         if self.normalize_l:
-            self.l_feature = self.normalize_feature(self.l_feature)
+            self.l_feature = self.normalize_feature(self.l_feature, self.mask)
         if load_label:
             self.target = input[self.target_name].to(self.device)
 
 
     def run(self):
         """After feed a batch of samples, Run the model."""
-        batch_size = self.a_feature.size(0)
+        batch_size = self.target.size(0)
         batch_max_length = torch.max(self.length).item()
         # calc num of splited segments
         split_seg_num = batch_max_length // self.max_seq_len + int(batch_max_length % self.max_seq_len != 0)
@@ -100,19 +90,15 @@ class MMTLstmModel(BaseModel):
         V_previous_c = torch.zeros(self.hidden_mul, batch_size, self.hidden_size).float().to(self.device)
         L_previous_h = torch.zeros(self.hidden_mul, batch_size, self.hidden_size).float().to(self.device) 
         L_previous_c = torch.zeros(self.hidden_mul, batch_size, self.hidden_size).float().to(self.device)
-        F_previous_h = torch.zeros(self.hidden_mul, batch_size, self.hidden_size).float().to(self.device) 
-        F_previous_c = torch.zeros(self.hidden_mul, batch_size, self.hidden_size).float().to(self.device)
-        
         self.output = [] 
         for step in range(split_seg_num):
             a_feature_step = self.a_feature[:, step*self.max_seq_len: (step+1)*self.max_seq_len]
             v_feature_step = self.v_feature[:, step*self.max_seq_len: (step+1)*self.max_seq_len]
             l_feature_step = self.l_feature[:, step*self.max_seq_len: (step+1)*self.max_seq_len]
             mask = self.mask[:, step*self.max_seq_len: (step+1)*self.max_seq_len]
-            previous_states = (A_previous_h, A_previous_c, V_previous_h, V_previous_c, L_previous_h, L_previous_c, F_previous_h, F_previous_c)
+            previous_states = (L_previous_h, L_previous_c, A_previous_h, A_previous_c, V_previous_h, V_previous_c)
             prediction, cur_states = self.forward_step(a_feature_step, v_feature_step, l_feature_step, previous_states)
-            A_previous_h, A_previous_c, V_previous_h, V_previous_c, \
-            L_previous_h, L_previous_c, F_previous_h, F_previous_c = cur_states
+            L_previous_h, L_previous_c, A_previous_h, A_previous_c, V_previous_h, V_previous_c = cur_states
             self.output.append(prediction.squeeze(dim=-1))
             # backward
             if self.isTrain:
@@ -123,15 +109,11 @@ class MMTLstmModel(BaseModel):
         self.output = torch.cat(self.output, dim=1)
     
     def forward_step(self, a_data, v_data, l_data, previous_states):
-        A_previous_h, A_previous_c, V_previous_h, V_previous_c, \
-        L_previous_h, L_previous_c, F_previous_h, F_previous_c = previous_states
+        L_previous_h, L_previous_c, A_previous_h, A_previous_c, V_previous_h, V_previous_c = previous_states
         state_l = (L_previous_h, L_previous_c)
         state_a = (A_previous_h, A_previous_c)
         state_v = (V_previous_h, V_previous_c)
-        state_f = (F_previous_h, F_previous_c)
-
-        hidden, cur_states = self.net_seq(a_data, v_data, l_data, state_a, state_v, state_l, state_f)
-        prediction, _ = self.net_reg(hidden)
+        prediction, _ , cur_states = self.net_seq(l_data, a_data, v_data, state_l, state_a, state_v)
         cur_states = (x.detach() for x in cur_states)
         return prediction, cur_states
    
