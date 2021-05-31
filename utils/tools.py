@@ -11,6 +11,7 @@ def get_dim(feat_name):
         'vggface': 512, 
         'pose': 6, 
         'egemaps': 88, 
+        'bert': 768,
         'gocar': 350, 
         'gaze': 288, 
         'openpose': 54, 

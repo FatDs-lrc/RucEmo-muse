@@ -9,7 +9,7 @@ from torch.nn.utils.rnn import pad_sequence
 from .base_dataset import BaseDataset
 
 
-class MuseWildDataset(BaseDataset):
+class MusePhysioDataset(BaseDataset):
     def __init__(self, opt, set_name):
         ''' MuseWild dataset
         Parameter:
@@ -17,6 +17,7 @@ class MuseWildDataset(BaseDataset):
         set_name: [trn, val, tst]
         '''
         super().__init__(opt)
+        self.root = '/data12/lrc/MUSE2021/h5_data/c4_muse_physio/'
         self.feature_set = list(map(lambda x: x.strip(), opt.feature_set.split(',')))
         self.set_name = set_name
         self.load_label()
@@ -33,8 +34,7 @@ class MuseWildDataset(BaseDataset):
         for _id in self.seg_ids:
             if self.set_name != 'tst':
                 self.target[_id] = {
-                    'arousal': torch.from_numpy(label_h5f[_id]['arousal'][()]).float(),
-                    'valence': torch.from_numpy(label_h5f[_id]['valence'][()]).float(),
+                    'EDA': torch.from_numpy(label_h5f[_id]['anno12_EDA'][()]).float(),
                     'length': torch.as_tensor(label_h5f[_id]['length'][()]).long(),
                     'timestamp': torch.from_numpy(label_h5f[_id]['timestamp'][()]).long(),
                 }
@@ -51,7 +51,8 @@ class MuseWildDataset(BaseDataset):
             feature_data = {}
             for _id in self.seg_ids:
                 feature_data[_id] = h5f[self.set_name][_id]['feature'][()]
-                assert (h5f[self.set_name][_id]['timestamp'][()] == self.target[_id]['timestamp'].numpy()).all(), '\
+                # assert (h5f[self.set_name][_id]['timestamp'][()] == self.target[_id]['timestamp'].numpy()).all(), '\
+                assert len(h5f[self.set_name][_id]['timestamp'][()]) == len(self.target[_id]['timestamp']), '\
                     Data Error: In feature {}, seg_id: {}, timestamp does not match label timestamp'.format(feature_name, _id)
             self.feature_data[feature_name] = feature_data
 
@@ -82,9 +83,8 @@ class MuseWildDataset(BaseDataset):
         vid = [sample['vid'] for sample in batch]
 
         if self.set_name != 'tst':
-            arousal = pad_sequence([sample['arousal'] for sample in batch], padding_value=torch.tensor(0.0), batch_first=True)
-            valence = pad_sequence([sample['valence'] for sample in batch], padding_value=torch.tensor(0.0), batch_first=True)
-        
+            EDA = pad_sequence([sample['EDA'] for sample in batch], padding_value=torch.tensor(0.0), batch_first=True)
+
         feature_lens = batch[0]['feature_lens']
         feature_names = batch[0]['feature_names']
         # make mask
@@ -96,8 +96,7 @@ class MuseWildDataset(BaseDataset):
         
         return {
             'feature': feature.float(), 
-            'arousal': arousal.float(), 
-            'valence': valence.float(),
+            'EDA': EDA.float(), 
             'timestamp': timestamp.long(),
             'mask': mask.float(),
             'length': length,
@@ -116,12 +115,12 @@ class MuseWildDataset(BaseDataset):
 
 if __name__ == '__main__':
     class test:
-        feature_set = 'egemaps,au,fasttext'
-        dataroot = '/data7/lrc/MuSe2020/MuSe2020_features/wild/'
+        feature_set = 'bert,vggface,vggish'
+        dataroot = '/data12/lrc/MUSE2021/h5_data/c4_muse_physio/'
         max_seq_len = 100
     
     opt = test()
-    a = MuseWildDataset(opt, 'trn')
+    a = MusePhysioDataset(opt, 'trn')
     iter_a = iter(a)
     data1 = next(iter_a)
     data2 = next(iter_a)
@@ -129,8 +128,7 @@ if __name__ == '__main__':
     batch_data = a.collate_fn([data1, data2, data3])
     print(batch_data.keys())
     print(batch_data['feature'].shape)
-    print(batch_data['arousal'].shape)
-    print(batch_data['valence'].shape)
+    print(batch_data['EDA'].shape)
     print(batch_data['mask'].shape)
     print(batch_data['length'])
     print(torch.sum(batch_data['mask'][0]), torch.sum(batch_data['mask'][1]), torch.sum(batch_data['mask'][2]))

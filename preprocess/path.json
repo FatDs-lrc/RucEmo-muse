@@ -1,0 +1,12 @@
+{
+    "c3_muse_stress": {
+        "root": "/data12/lrc/MUSE2021/data/c3_muse_stress",
+        "save_dir": "/data12/lrc/MUSE2021/h5_data/c3_muse_stress/",
+        "target": ["arousal", "valence"]
+    },
+    "c4_muse_physio": {
+        "root": "/data12/lrc/MUSE2021/data/c4_muse_physio",
+        "save_dir": "/data12/lrc/MUSE2021/h5_data/c4_muse_physio/",
+        "target": ["anno12_EDA"]
+    }
+}
