@@ -9,7 +9,7 @@ from torch.nn.utils.rnn import pad_sequence
 from .base_dataset import BaseDataset
 
 
-class MuseStressDataset(BaseDataset):
+class MuseStressDataset(BaseDataset):    
     def __init__(self, opt, set_name):
         ''' MuseWild dataset
         Parameter:

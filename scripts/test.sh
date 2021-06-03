@@ -75,7 +75,7 @@ checkpoints=`echo $checkpoints | xargs | sed s/[[:space:]]//g`
 cmd="python test.py --dataset_mode=None --model=None
 --target=valence --submit_dir=submit --write_sub_results
 --template_dir=submit/template/wild/label_segments
---checkpoints_dir=./checkpoints --gpu_ids=3
+--checkpoints_dir=./checkpoints --gpu_ids=0
 --name=submit3 --test_checkpoints='$checkpoints'"
 
 # echo "\n-------------------------------------------------------------------------------------"
